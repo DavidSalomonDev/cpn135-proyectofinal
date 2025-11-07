@@ -6,7 +6,7 @@ from psycopg2.extras import RealDictCursor
 def get_db():
     if "db" not in g:
         conn = psycopg2.connect(
-            host="localhost",
+            host="3.21.242.71",
             port=5432,
             dbname="empleados",
             user="admin",
