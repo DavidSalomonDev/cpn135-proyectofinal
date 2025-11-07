@@ -8,6 +8,32 @@ def create_routes(app):
     @app.route("/health", methods=["GET"])
     def health():
         return jsonify({"status": "ok"}), 200
+    
+     # --- GET /employees ---
+    @app.route("/employees", methods=["GET"])
+    def get_employees():
+        try:
+            conn = db_module.get_db()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM empleados ORDER BY id ASC"
+            )
+            rows = cur.fetchall()
+            cur.close()
+
+            employees = []
+            for row in rows:
+                employees.append({
+                    "id": row[0],
+                    "nombre": row[1],
+                    "apellido": row[2],
+                    "cargo": row[3],
+                    "salario": float(row[4]) if row[4] is not None else None
+                })
+
+            return jsonify(employees), 200
+        except Exception as e:
+            return jsonify({"error": "error al obtener empleados", "detail": str(e)}), 500
 
     @app.route("/employees", methods=["POST"])
     def add_employee():
@@ -17,8 +43,6 @@ def create_routes(app):
         apellido = data.get("apellido")
         cargo = data.get("cargo", "")
         salario = data.get("salario", None)
-        creado_en = data.get("creado_en", None)
-        actualizado_en = data.get("actualizado_en", None)
 
         if not nombre or not apellido:
             return jsonify({"error": "nombre y apellido son requeridos"}), 400
@@ -28,18 +52,18 @@ def create_routes(app):
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO employees (nombre, apellido, cargo, salario, creado_en, actualizado_en)
+                INSERT INTO empleados (nombre, apellido, cargo, salario)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id, created_at
+                RETURNING id, creado_en
                 """,
-                (nombre, apellido, cargo, salario, creado_en, actualizado_en)
+                (nombre, apellido, cargo, salario)
             )
             result = cur.fetchone()
             conn.commit()
             cur.close()
             return jsonify({
                 "id": result[0],
-                "created_at": result[1].isoformat()
+                "creado_en": result[1].isoformat()
             }), 201
         except Exception as e:
             # no exponer errores internos en producción
