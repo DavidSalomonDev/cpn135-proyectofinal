@@ -13,24 +13,26 @@ def create_routes(app):
     def add_employee():
         data = request.get_json(silent=True) or {}
         # validaciones básicas
-        name = data.get("name")
-        email = data.get("email")
-        position = data.get("position", "")
-        salary = data.get("salary", None)
+        nombre = data.get("nombre")
+        apellido = data.get("apellido")
+        cargo = data.get("cargo", "")
+        salario = data.get("salario", None)
+        creado_en = data.get("creado_en", None)
+        actualizado_en = data.get("actualizado_en", None)
 
-        if not name or not email:
-            return jsonify({"error": "name y email son requeridos"}), 400
+        if not nombre or not apellido:
+            return jsonify({"error": "nombre y apellido son requeridos"}), 400
 
         try:
             conn = db_module.get_db()
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO employees (name, email, position, salary)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO employees (nombre, apellido, cargo, salario, creado_en, actualizado_en)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id, created_at
                 """,
-                (name, email, position, salary)
+                (nombre, apellido, cargo, salario, creado_en, actualizado_en)
             )
             result = cur.fetchone()
             conn.commit()
