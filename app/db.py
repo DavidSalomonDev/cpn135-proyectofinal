@@ -6,11 +6,11 @@ from psycopg2.extras import RealDictCursor
 def get_db():
     if "db" not in g:
         conn = psycopg2.connect(
-            host=os.getenv("DB_HOST"),
-            port=int(os.getenv("DB_PORT", 5432)),
-            dbname=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD"),
+            host="localhost",
+            port=5432,
+            dbname="empleados",
+            user="admin",
+            password="Password123",
             connect_timeout=5
         )
         g.db = conn
