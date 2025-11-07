@@ -1,15 +1,20 @@
 import os
+import logging
 from flask import request, jsonify
 from flask import current_app as app
 from . import db as db_module
 from flask import Flask
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def create_routes(app):
     @app.route("/health", methods=["GET"])
     def health():
         return jsonify({"status": "ok"}), 200
     
-     # --- GET /employees ---
+    # --- GET /employees ---
     @app.route("/employees", methods=["GET"])
     def get_employees():
         try:
@@ -33,7 +38,8 @@ def create_routes(app):
 
             return jsonify(employees), 200
         except Exception as e:
-            return jsonify({"error": "error al obtener empleados", "detail": str(e)}), 500
+            logger.error(f"Error al obtener empleados: {str(e)}")
+            return jsonify({"error": "Error al obtener empleados"}), 500
 
     @app.route("/employees", methods=["POST"])
     def add_employee():
@@ -53,7 +59,7 @@ def create_routes(app):
             cur.execute(
                 """
                 INSERT INTO empleados (nombre, apellido, cargo, salario)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id, creado_en
                 """,
                 (nombre, apellido, cargo, salario)
@@ -66,13 +72,19 @@ def create_routes(app):
                 "creado_en": result[1].isoformat()
             }), 201
         except Exception as e:
-            # no exponer errores internos en producción
-            return jsonify({"error": "error al insertar empleado", "detail": str(e)}), 500
+            logger.error(f"Error al insertar empleado: {str(e)}")
+            return jsonify({"error": "Error al insertar empleado"}), 500
 
 def create_app():
     app = Flask(__name__)
+
+    # Genera una clave secreta si no está definida en variables de entorno
+    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(24).hex()
+
     db_module.init_db(app)
-    create_routes(app)
+    from . import main
+    main.create_routes(app)
+
     return app
 
 if __name__ == "__main__":
