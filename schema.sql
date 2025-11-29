@@ -1,10 +1,9 @@
 -- Crear tabla empleados
 CREATE TABLE IF NOT EXISTS empleados (
-    id SERIAL PRIMARY KEY,
+    uuid UUID PRIMARY KEY,
     nombre VARCHAR(100) NOT NULL,
-    apellido VARCHAR(100) NOT NULL,
-    cargo VARCHAR(100),
-    salario DECIMAL(10,2),
+    correo VARCHAR(255) NOT NULL,
+    telefono VARCHAR(50) NOT NULL,
     creado_en TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

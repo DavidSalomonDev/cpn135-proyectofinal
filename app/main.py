@@ -1,5 +1,6 @@
 import os
 import logging
+import uuid
 from flask import request, jsonify
 from flask import current_app as app
 from . import db as db_module
@@ -17,11 +18,29 @@ def create_routes(app):
     # --- GET /employees ---
     @app.route("/employees", methods=["GET"])
     def get_employees():
+        """Devuelve la lista de contactos.
+
+        Cada elemento tiene la forma:
+        {
+          "uuid": "...",
+          "nombre": "...",
+          "correo": "...",
+          "telefono": "..."
+        }
+        """
         try:
             conn = db_module.get_db()
             cur = conn.cursor()
             cur.execute(
-                "SELECT * FROM empleados ORDER BY id ASC"
+                """
+                SELECT
+                    uuid,
+                    nombre,
+                    correo,
+                    telefono
+                FROM empleados
+                ORDER BY creado_en ASC
+                """
             )
             rows = cur.fetchall()
             cur.close()
@@ -29,11 +48,10 @@ def create_routes(app):
             employees = []
             for row in rows:
                 employees.append({
-                    "id": row[0],
+                    "uuid": row[0],
                     "nombre": row[1],
-                    "apellido": row[2],
-                    "cargo": row[3],
-                    "salario": float(row[4]) if row[4] is not None else None
+                    "correo": row[2],
+                    "telefono": row[3]
                 })
 
             return jsonify(employees), 200
@@ -43,33 +61,65 @@ def create_routes(app):
 
     @app.route("/employees", methods=["POST"])
     def add_employee():
-        data = request.get_json(silent=True) or {}
-        # validaciones básicas
-        nombre = data.get("nombre")
-        apellido = data.get("apellido")
-        cargo = data.get("cargo", "")
-        salario = data.get("salario", None)
+        """Crea un empleado a partir de un payload con la forma:
+        {
+          "contacto": {
+            "nombre": "Henry",
+            "correo": "henry@example.com",
+            "telefono": "+50371234567"
+          }
+        }
 
-        if not nombre or not apellido:
-            return jsonify({"error": "nombre y apellido son requeridos"}), 400
+        El UUID ya no es obligatorio en el cuerpo: se genera
+        automáticamente en el servidor usando uuid.uuid4().
+        """
+        data = request.get_json(silent=True) or {}
+
+        contacto = data.get("contacto")
+        if not isinstance(contacto, dict):
+            return jsonify({"error": "El cuerpo debe incluir un objeto 'contacto'"}), 400
+
+        nombre = contacto.get("nombre")
+        correo = contacto.get("correo")
+        telefono = contacto.get("telefono")
+
+        # Validaciones básicas del nuevo formato
+        if not nombre or not correo or not telefono:
+            return jsonify({
+                "error": "nombre, correo y telefono son requeridos dentro de 'contacto'"
+            }), 400
+
+        # Generar UUID automático para el contacto
+        generated_uuid = str(uuid.uuid4())
 
         try:
             conn = db_module.get_db()
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO empleados (nombre, apellido, cargo, salario)
+                INSERT INTO empleados (
+                    uuid,
+                    nombre,
+                    correo,
+                    telefono
+                )
                 VALUES (%s, %s, %s, %s)
-                RETURNING id, creado_en
+                RETURNING uuid, creado_en
                 """,
-                (nombre, apellido, cargo, salario)
+                (generated_uuid, nombre, correo, telefono)
             )
             result = cur.fetchone()
             conn.commit()
             cur.close()
             return jsonify({
-                "id": result[0],
-                "creado_en": result[1].isoformat()
+                "uuid": result[0],
+                "creado_en": result[1].isoformat(),
+                "contacto": {
+                    "uuid": result[0],
+                    "nombre": nombre,
+                    "correo": correo,
+                    "telefono": telefono
+                }
             }), 201
         except Exception as e:
             logger.error(f"Error al insertar empleado: {str(e)}")
