@@ -26,4 +26,4 @@ ENV FLASK_APP=app.main:create_app
 EXPOSE 5000
 
 # Usar gunicorn para producción
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app.main:create_app()"]
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app.main:create_app"]

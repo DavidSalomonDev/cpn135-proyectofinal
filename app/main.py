@@ -1,13 +1,13 @@
 import os
 import logging
 import socket
+import smtplib
+from email.message import EmailMessage
 
 from flask import Flask, request, jsonify
+from dotenv import load_dotenv
 
 from . import db as db_module
-
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
 from twilio.rest import Client as TwilioClient
 
 # Configurar logging básico
@@ -17,57 +17,82 @@ logger = logging.getLogger(__name__)
 
 def get_server_ip() -> str:
     """
-    Devuelve la IP del servidor que responde.
-    Primero intenta leer SERVER_IP de variables de entorno y si no,
-    intenta resolver la IP local.
+    Obtiene la IP del servidor. Si existe la variable de entorno SERVER_IP,
+    se usa esa (por si quieres forzar una IP pública específica).
     """
     env_ip = os.getenv("SERVER_IP")
     if env_ip:
         return env_ip
 
     try:
-        return socket.gethostbyname(socket.gethostname())
+        hostname = socket.gethostname()
+        return socket.gethostbyname(hostname)
     except Exception:
-        return "unknown"
+        logger.exception("No se pudo obtener la IP del servidor")
+        return "0.0.0.0"
 
 
 def send_email(uuid_value: str, nombre: str, correo: str, server_ip: str) -> None:
     """
-    Envía un correo utilizando Amazon SES con la info requerida por el examen.
+    Envía un correo utilizando Amazon SES vía SMTP.
+
+    Requiere variables de entorno:
+
+    - AWS_REGION (ej: us-east-1)
+    - SES_FROM_EMAIL  (remitente verificado en SES)
+    - SES_SMTP_HOST   (ej: email-smtp.us-east-1.amazonaws.com)
+    - SES_SMTP_PORT   (normalmente 587)
+    - SES_SMTP_USERNAME
+    - SES_SMTP_PASSWORD
     """
     region = os.getenv("AWS_REGION", "us-east-1")
     source = os.getenv("SES_FROM_EMAIL")
 
+    smtp_host = os.getenv("SES_SMTP_HOST") or f"email-smtp.{region}.amazonaws.com"
+    smtp_port = int(os.getenv("SES_SMTP_PORT", "587"))
+    smtp_user = os.getenv("SES_SMTP_USERNAME")
+    smtp_pass = os.getenv("SES_SMTP_PASSWORD")
+
     if not source:
         raise RuntimeError("SES_FROM_EMAIL no está configurado en variables de entorno")
 
-    ses = boto3.client("ses", region_name=region)
+    if not smtp_user or not smtp_pass:
+        raise RuntimeError(
+            "SES_SMTP_USERNAME y SES_SMTP_PASSWORD deben estar configurados"
+        )
 
     subject = "Notificación de registro CPN135"
     body = (
         f"Nombre: {nombre}\n"
         f"UUID: {uuid_value}\n"
-        f"IP: {server_ip}\n"
+        f"IP del servidor: {server_ip}\n"
     )
 
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = source
+    msg["To"] = correo
+    msg.set_content(body)
+
     try:
-        ses.send_email(
-            Source=source,
-            Destination={"ToAddresses": [correo]},
-            Message={
-                "Subject": {"Data": subject, "Charset": "UTF-8"},
-                "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
-            },
-        )
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
         logger.info("Correo enviado correctamente a %s", correo)
-    except (BotoCoreError, ClientError):
-        logger.exception("Error al enviar correo con SES")
+    except Exception:
+        logger.exception("Error al enviar correo con SES (SMTP)")
         raise
 
 
 def send_sms(uuid_value: str, nombre: str, telefono: str, server_ip: str) -> None:
     """
-    Envía un SMS utilizando la API de Twilio con la info requerida por el examen.
+    Envía un SMS utilizando Twilio.
+
+    Requiere variables de entorno:
+    - TWILIO_ACCOUNT_SID
+    - TWILIO_AUTH_TOKEN
+    - TWILIO_FROM_NUMBER
     """
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
@@ -75,25 +100,26 @@ def send_sms(uuid_value: str, nombre: str, telefono: str, server_ip: str) -> Non
 
     if not account_sid or not auth_token or not from_number:
         raise RuntimeError(
-            "Las variables TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y "
-            "TWILIO_FROM_NUMBER deben estar configuradas"
+            "TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_FROM_NUMBER "
+            "deben estar configurados"
         )
 
     client = TwilioClient(account_sid, auth_token)
 
-    body = (
+    message_body = (
+        f"Registro CPN135:\n"
         f"Nombre: {nombre}\n"
         f"UUID: {uuid_value}\n"
-        f"IP: {server_ip}"
+        f"IP servidor: {server_ip}"
     )
 
     try:
-        client.messages.create(
-            body=body,
+        message = client.messages.create(
+            body=message_body,
             from_=from_number,
             to=telefono,
         )
-        logger.info("SMS enviado correctamente a %s", telefono)
+        logger.info("SMS enviado correctamente a %s, SID=%s", telefono, message.sid)
     except Exception:
         logger.exception("Error al enviar SMS con Twilio")
         raise
@@ -107,15 +133,17 @@ def create_routes(app: Flask) -> None:
     @app.route("/registro", methods=["POST"])
     def registro():
         """
-        Endpoint principal del examen.
-        Recibe por POST un JSON con al menos:
+        Endpoint principal:
+
+        Recibe JSON:
         {
-          "uuid": "...",
-          "nombre": "...",
-          "correo": "...",
-          "telefono": "..."
+          "uuid": "....",
+          "nombre": "....",
+          "correo": "....",
+          "telefono": "...."
         }
-        1) Guarda la info en la BD
+
+        1) Guarda la info en la tabla 'registros'
         2) Envía correo (SES)
         3) Envía SMS (Twilio)
         4) Responde con la info y la IP del servidor
@@ -140,59 +168,58 @@ def create_routes(app: Flask) -> None:
                 400,
             )
 
-        # 1. Guardar en BD
-        try:
-            conn = db_module.get_db()
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO registros (uuid, nombre, correo, telefono)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id, creado_en
-                """,
-                (uuid_value, nombre, correo, telefono),
-            )
-            row = cur.fetchone()
-            conn.commit()
-            cur.close()
-            logger.info("Registro almacenado en BD con id=%s", row[0])
-        except Exception:
-            logger.exception("Error al insertar registro en la base de datos")
-            return jsonify({"error": "Error al almacenar en la base de datos"}), 500
-
+        # Obtener conexión a BD
+        conn = db_module.get_db()
         server_ip = get_server_ip()
 
-        # 2. Enviar correo
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO registros (uuid, nombre, correo, telefono)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id, creado_en;
+                    """,
+                    (uuid_value, nombre, correo, telefono),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        except Exception:
+            logger.exception("Error al insertar en la tabla 'registros'")
+            conn.rollback()
+            return jsonify({"error": "Error al insertar en la base de datos"}), 500
+
+        # Enviar correo y SMS
         try:
             send_email(uuid_value, nombre, correo, server_ip)
         except Exception:
-            # El examen exige envío de correo, así que si falla devolvemos error
-            return jsonify({"error": "Error al enviar correo"}), 500
+            # Opcional: puedes decidir si esto debe romper o no el flujo
+            return jsonify({"error": "Error enviando correo con SES"}), 500
 
-        # 3. Enviar SMS
         try:
             send_sms(uuid_value, nombre, telefono, server_ip)
         except Exception:
-            return jsonify({"error": "Error al enviar SMS"}), 500
+            return jsonify({"error": "Error enviando SMS con Twilio"}), 500
 
-        # 4. Responder al cliente
-        return (
-            jsonify(
-                {
-                    "id": row[0],
-                    "uuid": uuid_value,
-                    "nombre": nombre,
-                    "correo": correo,
-                    "telefono": telefono,
-                    "ip": server_ip,
-                    "creado_en": row[1].isoformat(),
-                }
-            ),
-            201,
-        )
+        response = {
+            "id": row["id"] if row and "id" in row else None,
+            "uuid": uuid_value,
+            "nombre": nombre,
+            "correo": correo,
+            "telefono": telefono,
+            "server_ip": server_ip,
+        }
+
+        return jsonify(response), 201
 
 
 def create_app() -> Flask:
+    """
+    Factory de la aplicación Flask.
+    """
+    # Cargar variables de entorno de un archivo .env (si existe)
+    load_dotenv()
+
     app = Flask(__name__)
 
     # Genera una clave secreta si no está definida en variables de entorno
